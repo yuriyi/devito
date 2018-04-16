@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 from devito.logger import info
 from devito import Constant
 from examples.seismic.acoustic import AcousticWaveSolver
-from examples.seismic import demo_model, RickerSource, Receiver
+from examples.seismic import demo_model, TimeAxis, RickerSource, Receiver
 
 
 # Velocity models
@@ -28,22 +28,21 @@ def acoustic_setup(shape=(50, 50, 50), spacing=(15.0, 15.0, 15.0),
                    constant=False, **kwargs):
     nrec = shape[0]
     preset = 'constant-isotropic' if constant else 'layers-isotropic'
-    model = demo_model(preset, shape=shape, dtype=kwargs.pop('dtype', np.float32),
-                       spacing=spacing, nbpml=nbpml)
+    model = demo_model(preset, space_order=space_order, shape=shape, nbpml=nbpml,
+                       dtype=kwargs.pop('dtype', np.float32), spacing=spacing)
 
     # Derive timestepping from model spacing
     dt = model.critical_dt * (1.73 if kernel == 'OT4' else 1.0)
     t0 = 0.0
-    nt = int(1 + (tn-t0) / dt)  # Number of timesteps
-    time = np.linspace(t0, tn, nt)  # Discretized time axis
+    time_range = TimeAxis(start=t0, stop=tn, step=dt)
 
     # Define source geometry (center of domain, just below surface)
-    src = RickerSource(name='src', grid=model.grid, f0=0.01, time=time, space_order=1)
+    src = RickerSource(name='src', grid=model.grid, f0=0.01, time_range=time_range)
     src.coordinates.data[0, :] = np.array(model.domain_size) * .5
-    # src.coordinates.data[0, -1] = model.origin[-1] + 4 * spacing[-1]
+    src.coordinates.data[0, -1] = model.origin[-1] + 2 * spacing[-1]
 
     # Define receiver geometry (spread across x, just below surface)
-    rec = Receiver(name='rec', grid=model.grid, ntime=nt, npoint=nrec)
+    rec = Receiver(name='rec', grid=model.grid, time_range=time_range, npoint=nrec)
     rec.coordinates.data[:, 0] = np.linspace(0., model.domain_size[0], num=nrec)
     rec.coordinates.data[:, 1:] = src.coordinates.data[0, 1:]
 
@@ -64,6 +63,7 @@ def run(shape=(50, 50, 50), spacing=(20.0, 20.0, 20.0), tn=1000.0,
     initial_vp = smooth10(solver.model.m.data, solver.model.shape_domain)
     dm = np.float32(initial_vp**2 - solver.model.m.data)
     info("Applying Forward")
+    # Define receiver geometry (spread across x, just below surface)
     rec, u, summary = solver.forward(save=full_run, autotune=autotune)
 
     if constant:

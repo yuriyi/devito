@@ -8,17 +8,16 @@ from cached_property import cached_property
 from collections import Iterable, OrderedDict, namedtuple
 
 import cgen as c
-from sympy import Eq, Indexed, Symbol
 
 from devito.cgen_utils import ccode
-from devito.ir.iet import (IterationProperty, SEQUENTIAL, PARALLEL,
-                           VECTOR, ELEMENTAL, REMAINDER, WRAPPABLE,
-                           tagger, ntags)
-from devito.ir.support import Forward
+from devito.ir.equations import ClusterizedEq
+from devito.ir.iet import (IterationProperty, SEQUENTIAL, PARALLEL, PARALLEL_IF_ATOMIC,
+                           VECTOR, ELEMENTAL, REMAINDER, WRAPPABLE, tagger, ntags)
+from devito.ir.support import Forward, detect_io
 from devito.dimension import Dimension
-from devito.symbolics import as_symbol, retrieve_terminals
+from devito.symbolics import as_symbol
 from devito.tools import as_tuple, filter_ordered, filter_sorted, flatten
-import devito.types as types
+from devito.types import AbstractFunction, Symbol, Indexed
 
 __all__ = ['Node', 'Block', 'Denormals', 'Expression', 'Element', 'Callable',
            'Call', 'Conditional', 'Iteration', 'List', 'LocalExpression', 'TimedList',
@@ -181,7 +180,7 @@ class Call(Node):
     @property
     def functions(self):
         """Return all :class:`Symbol` objects used by this :class:`Call`."""
-        return tuple(p for p in self.params if isinstance(p, types.AbstractFunction))
+        return tuple(p for p in self.params if isinstance(p, AbstractFunction))
 
     @cached_property
     def free_symbols(self):
@@ -199,23 +198,18 @@ class Call(Node):
 
 class Expression(Node):
 
-    """A node encapsulating a single SymPy equation."""
+    """A node encapsulating a SymPy equation."""
 
     is_Expression = True
 
-    def __init__(self, expr, dtype=None):
-        assert isinstance(expr, Eq)
+    def __init__(self, expr):
+        assert isinstance(expr, ClusterizedEq)
         assert isinstance(expr.lhs, (Symbol, Indexed))
         self.expr = expr
-        self.dtype = dtype
 
-        # Traverse /expression/ to determine meta information
-        # Note: at this point, expressions have already been indexified
-        self.reads = [i for i in retrieve_terminals(self.expr.rhs)
-                      if isinstance(i, (types.Indexed, types.Symbol))]
-        self.reads = filter_ordered(self.reads)
-        # Filter collected dimensions and functions
-        self.dimensions = flatten(i.indices for i in self.functions)
+        self._functions = tuple(filter_ordered(flatten(detect_io(expr, relax=True))))
+
+        self.dimensions = flatten(i.indices for i in self.functions if i.is_Indexed)
         self.dimensions = filter_ordered(self.dimensions)
 
     def __repr__(self):
@@ -231,6 +225,10 @@ class Expression(Node):
         self.expr = self.expr.xreplace(substitutions)
 
     @property
+    def dtype(self):
+        return self.expr.dtype
+
+    @property
     def output(self):
         """
         Return the symbol written by this Expression.
@@ -239,8 +237,7 @@ class Expression(Node):
 
     @property
     def functions(self):
-        functions = [self.write] + [i.base.function for i in self.reads]
-        return tuple(filter_ordered(functions))
+        return self._functions
 
     @property
     def defines(self):
@@ -269,6 +266,13 @@ class Expression(Node):
         Return True if a tensor expression, False otherwise.
         """
         return not self.is_scalar
+
+    @property
+    def is_increment(self):
+        """
+        Return True if the write is actually an associative and commutative increment.
+        """
+        return self.expr.is_Increment
 
     @property
     def shape(self):
@@ -329,7 +333,7 @@ class Iteration(Node):
         # Track this Iteration's properties, pragmas and unbounded indices
         properties = as_tuple(properties)
         assert (i in IterationProperty._KNOWN for i in properties)
-        self.properties = as_tuple(filter_sorted(properties, key=lambda i: i.name))
+        self.properties = as_tuple(filter_sorted(properties))
         self.pragmas = as_tuple(pragmas)
         self.uindices = as_tuple(uindices)
         assert all(isinstance(i, UnboundedIndex) for i in self.uindices)
@@ -363,6 +367,14 @@ class Iteration(Node):
     @property
     def is_Parallel(self):
         return PARALLEL in self.properties
+
+    @property
+    def is_ParallelAtomic(self):
+        return PARALLEL_IF_ATOMIC in self.properties
+
+    @property
+    def is_ParallelRelaxed(self):
+        return self.is_Parallel or self.is_ParallelAtomic
 
     @property
     def is_Vectorizable(self):
@@ -421,21 +433,28 @@ class Iteration(Node):
         """
         Return the symbolic extent of the Iteration.
         """
-        return self.bounds_symbolic[1] - self.bounds_symbolic[0]
+        return self.bounds_symbolic[1] - self.bounds_symbolic[0] + 1
 
     @property
     def start_symbolic(self):
         """
-        Return the symbolic extent of the Iteration.
+        Return the symbolic start of the Iteration.
         """
         return self.bounds_symbolic[0]
 
     @property
     def end_symbolic(self):
         """
-        Return the symbolic extent of the Iteration.
+        Return the symbolic end of the Iteration.
         """
         return self.bounds_symbolic[1]
+
+    @property
+    def incr_symbolic(self):
+        """
+        Return the symbolic extent of the Iteration.
+        """
+        return self.limits[2]
 
     def bounds(self, start=None, finish=None):
         """Return the start and end points of the Iteration if the limits are
@@ -455,7 +474,7 @@ class Iteration(Node):
         ``None`` otherwise."""
         start, finish = self.bounds(start, finish)
         try:
-            return finish - start
+            return finish - start + 1
         except TypeError:
             return None
 
@@ -495,15 +514,15 @@ class Iteration(Node):
 
 class Callable(Node):
 
-    """A node representing a function.
+    """A node representing a callable function.
 
-    :param name: The name of the function.
+    :param name: The name of the callable.
     :param body: A :class:`Node` or an iterable of :class:`Node` objects representing
-                 the body of the function.
-    :param retval: The type of the value returned by the function.
-    :param parameters: An iterable of :class:`SymbolicData` objects in input to the
-                       function, or ``None`` if the function takes no parameter.
-    :param prefix: An iterable of qualifiers to prepend to the function declaration.
+                 the body of the callable.
+    :param retval: The type of the value returned by the callable.
+    :param parameters: An iterable of :class:`AbstractFunction`s in input to the
+                       callable, or ``None`` if the callable takes no parameter.
+    :param prefix: An iterable of qualifiers to prepend to the callable declaration.
                    The default value is ('static', 'inline').
     """
 
@@ -684,13 +703,8 @@ class PointerCast(Node):
 class LocalExpression(Expression):
 
     """
-    A node encapsulating a single SymPy equation with known data type,
-    represented as a NumPy data type.
+    A node encapsulating a SymPy equation which also defines its LHS.
     """
-
-    def __init__(self, expr, dtype):
-        super(LocalExpression, self).__init__(expr)
-        self.dtype = dtype
 
     @property
     def defines(self):
@@ -710,16 +724,26 @@ class UnboundedIndex(object):
     def __init__(self, index, start=0, step=None, dim=None, expr=None):
         self.name = index
         self.index = index
-        self.start = start
-        self.step = index + 1 if step is None else step
         self.dim = dim
         self.expr = expr
+
+        try:
+            self.start = as_symbol(start)
+        except TypeError:
+            self.start = start
+
+        try:
+            if step is None:
+                self.step = index + 1
+            else:
+                self.step = as_symbol(step)
+        except TypeError:
+            self.step = step
 
     @property
     def free_symbols(self):
         """
         Return the symbols used by this :class:`UnboundedIndex`.
-
         """
         free = self.index.free_symbols
         free.update(self.start.free_symbols)

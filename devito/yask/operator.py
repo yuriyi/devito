@@ -8,6 +8,7 @@ from devito.cgen_utils import ccode
 from devito.compiler import jit_compile
 from devito.dimension import LoweredDimension
 from devito.logger import yask as log, yask_warning as warning
+from devito.ir.equations import LoweredEq
 from devito.ir.iet import (Element, List, PointerCast, MetaCall, IsPerfectIteration,
                            Transformer, filter_iterations, retrieve_iteration_tree)
 from devito.operator import OperatorRunnable
@@ -34,15 +35,27 @@ class Operator(OperatorRunnable):
     _default_includes = OperatorRunnable._default_includes + ['yask_kernel_api.hpp']
 
     def __init__(self, expressions, **kwargs):
-        kwargs['dle'] = ('denormals',) + (('openmp',) if configuration['openmp'] else ())
         super(Operator, self).__init__(expressions, **kwargs)
         # Each YASK Operator needs to have its own compiler (hence the copy()
         # below) because Operator-specific shared object will be added to the
         # list of linked libraries
         self._compiler = configuration.yask['compiler'].copy()
 
-    def _specialize(self, nodes):
-        """Create a YASK representation of this Iteration/Expression tree."""
+    def _specialize_exprs(self, expressions):
+        expressions = super(Operator, self)._specialize_exprs(expressions)
+        # No matter whether offloading will occur or not, all YASK grids accept
+        # negative indices when using the get/set_element_* methods (up to the
+        # padding extent), so the OOB-relative data space should be adjusted
+        return [LoweredEq(e, e.ispace,
+                          e.dspace.zero([d for d in e.dimensions if d.is_Space]),
+                          e.reads, e.writes)
+                for e in expressions]
+
+    def _specialize_iet(self, nodes):
+        """Transform the Iteration/Expression tree to offload the computation of
+        one or more loop nests onto YASK. This involves calling the YASK compiler
+        to generate YASK code. Such YASK code is then called from within the
+        transformed Iteration/Expression tree."""
         log("Specializing a Devito Operator for YASK...")
 
         self.context = YaskNullContext()
@@ -80,6 +93,7 @@ class Operator(OperatorRunnable):
                 log("Solution '%s' contains %d grid(s) and %d equation(s)." %
                     (yc_soln.get_name(), yc_soln.get_num_grids(),
                      yc_soln.get_num_equations()))
+
             except:
                 log("Unable to offload a candidate tree.")
         else:
@@ -115,20 +129,18 @@ class Operator(OperatorRunnable):
 
         return List(body=casts + [nodes])
 
-    def _argument_defaults(self, arguments):
-        default_args = super(Operator, self)._argument_defaults(arguments)
+    def arguments(self, **kwargs):
+        args = {}
         # Add in solution pointer
-        default_args[namespace['code-soln-name']] = self.yk_soln.rawpointer
-
+        args[namespace['code-soln-name']] = self.yk_soln.rawpointer
         # Add in local grids pointers
         for k, v in self.yk_soln.local_grids.items():
-            default_args[namespace['code-grid-name'](k)] = rawpointer(v)
-
-        return default_args
+            args[namespace['code-grid-name'](k)] = rawpointer(v)
+        return super(Operator, self).arguments(backend=args, **kwargs)
 
     def apply(self, **kwargs):
         # Build the arguments list to invoke the kernel function
-        arguments = self.arguments(**kwargs)
+        args = self.arguments(**kwargs)
 
         # Map default Functions to runtime Functions; will be used for "grid sharing"
         toshare = {}
@@ -140,12 +152,12 @@ class Operator(OperatorRunnable):
                 toshare[v] = v.data
 
         log("Running YASK Operator through Devito...")
-        arg_values = [arguments[p.name] for p in self.parameters]
+        arg_values = [args[p.name] for p in self.parameters]
         self.yk_soln.run(self.cfunction, arg_values, toshare)
         log("YASK Operator successfully run!")
 
         # Output summary of performance achieved
-        return self._profile_output(arguments)
+        return self._profile_output(args)
 
     @property
     def compile(self):
@@ -263,7 +275,7 @@ def find_offloadable_trees(nodes):
         if not parallel:
             # Cannot offload non-parallel loops
             continue
-        if not (IsPerfectIteration().visit(tree) and
+        if not (IsPerfectIteration().visit(parallel[0]) and
                 all(i.is_Expression for i in tree[-1].nodes)):
             # Don't know how to offload this Iteration/Expression to YASK
             continue

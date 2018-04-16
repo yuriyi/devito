@@ -252,12 +252,12 @@ class CGen(Visitor):
 
         # For backward direction flip loop bounds
         if o.direction == Backward:
-            loop_init = 'int %s = %s' % (o.index, ccode('%s - 1' % end))
+            loop_init = 'int %s = %s' % (o.index, ccode(end))
             loop_cond = '%s >= %s' % (o.index, ccode(start))
             loop_inc = '%s -= %s' % (o.index, o.limits[2])
         else:
             loop_init = 'int %s = %s' % (o.index, ccode(start))
-            loop_cond = '%s < %s' % (o.index, ccode(end))
+            loop_cond = '%s <= %s' % (o.index, ccode(end))
             loop_inc = '%s += %s' % (o.index, o.limits[2])
 
         # Append unbounded indices, if any
@@ -538,8 +538,9 @@ class IsPerfectIteration(Visitor):
         return all(self.visit(i, **kwargs) for i in o)
 
     def visit_Node(self, o, found=False, **kwargs):
-        # Assume all nodes are in a perfect loop if they're in a loop.
-        return found
+        if not found:
+            return False
+        return all(self.visit(i, found=found, **kwargs) for i in o.children)
 
     def visit_Iteration(self, o, found=False, multi=False):
         if found and multi:

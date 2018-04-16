@@ -12,10 +12,8 @@ def laplacian(field, m, s, kernel):
     double laplacian:
     H = (laplacian + s**2/12 laplacian(1/m*laplacian))
     :param field: Symbolic TimeFunction object, solution to be computed
-    :param time_order: time order
     :param m: square slowness
     :param s: symbol for the time-step
-    :param kernel: `OT2` or `OT4` for 2nd or 4th order in time
     :return: H
     """
     biharmonic = field.laplace2(1/m) if kernel == 'OT4' else 0
@@ -27,14 +25,11 @@ def iso_stencil(field, m, s, damp, kernel, **kwargs):
     Stencil for the acoustic isotropic wave-equation:
     u.dt2 - H + damp*u.dt = 0
     :param field: Symbolic TimeFunction object, solution to be computed
-    :param time_order: time order
     :param m: square slowness
     :param s: symbol for the time-step
     :param damp: ABC dampening field (Function)
     :param kwargs: forwad/backward wave equation (sign of u.dt will change accordingly
     as well as the updated time-step (u.forwad or u.backward)
-    :param kernel: `OT2` or `OT4` for 2nd or 4th order in time
-    see http://www.hl107.math.msstate.edu/pdfs/rein/HighANM_final.pdf for OT4
     :return: Stencil for the wave-equation
     """
 
@@ -43,12 +38,7 @@ def iso_stencil(field, m, s, damp, kernel, **kwargs):
     # Define time sep to be updated
     next = field.forward if kwargs.get('forward', True) else field.backward
     # Define PDE
-    eq = m * field.dt2 - H
-    # Add full source if in
-    q = -kwargs.get('q', 0)
-    if kernel == 'OT4' and q != 0:
-        q -= -q.dt2 - q.W_laplacian(weight=1/m)
-    eq += q
+    eq = m * field.dt2 - H - kwargs.get('q', 0)
     # Add dampening field according to the propagation direction
     eq += damp * field.dt if kwargs.get('forward', True) else -damp * field.dt
     # Solve the symbolic equation for the field to be updated
@@ -59,37 +49,6 @@ def iso_stencil(field, m, s, damp, kernel, **kwargs):
     return [Eq(next, eq_time.subs({H: lap}))]
 
 
-def inject_src(src, field, s, model, kernel):
-    """
-    Source injection term depending on the kernel
-    `OT4` requries to apply a differentlial operator to the source
-    """
-    if kernel == 'OT2':
-        # Construct expression to inject source values
-        src_term = src.inject(field=field, expr=src * s**2 / model.m,
-                              offset=model.nbpml)
-    else:
-        # Construct expression to inject source values
-        expr = (src + s**2 / 12 * (src.dt2 + src.W_laplacian(weight=1/model.m)))
-        src_term = src.inject(field=field, expr=expr * s**2 / model.m,
-                              offset=model.nbpml)
-    return src_term
-
-
-def read_rec(rec, field, s, model, kernel):
-    """
-    For proper adjoint, the differential operator on the src in the Forward
-    operator has to be aplied to the srac (or v) in the adjoint operators
-    """
-    if kernel == 'OT2':
-        rec_term = rec.interpolate(expr=field, offset=model.nbpml)
-    else:
-        field_scaled = sum([field / d.spacing**2 for d in field.space_dimensions])
-        rec_term = rec.interpolate(expr=field+s**2/12*(field.dt2-2/model.m*field_scaled),
-                                   offset=model.nbpml)
-    return rec_term
-
-
 def ForwardOperator(model, source, receiver, space_order=4,
                     save=False, kernel='OT2', **kwargs):
     """
@@ -98,7 +57,6 @@ def ForwardOperator(model, source, receiver, space_order=4,
     :param model: :class:`Model` object containing the physical parameters
     :param source: :class:`PointData` object containing the source geometry
     :param receiver: :class:`PointData` object containing the acquisition geometry
-    :param time_order: Time discretization order
     :param space_order: Space discretization order
     :param save: Saving flag, True saves all time steps, False only the three
     """
@@ -108,18 +66,21 @@ def ForwardOperator(model, source, receiver, space_order=4,
     u = TimeFunction(name='u', grid=model.grid,
                      save=source.nt if save else None,
                      time_order=2, space_order=space_order)
-    src = PointSource(name='src', grid=model.grid, ntime=source.nt,
-                      npoint=source.npoint, space_order=space_order,
-                      time_order=2)
-    rec = Receiver(name='rec', grid=model.grid, ntime=receiver.nt,
+    src = PointSource(name='src', grid=model.grid, time_range=source.time_range,
+                      npoint=source.npoint)
+    rec = Receiver(name='rec', grid=model.grid, time_range=receiver.time_range,
                    npoint=receiver.npoint)
 
     s = model.grid.stepping_dim.spacing
     eqn = iso_stencil(u, m, s, damp, kernel)
+
     # Construct expression to inject source values
-    src_term = inject_src(src, u.forward, s, model, kernel)
+    src_term = src.inject(field=u.forward, expr=src * s**2 / m,
+                          offset=model.nbpml)
+
     # Create interpolation expression for receivers
     rec_term = rec.interpolate(expr=u, offset=model.nbpml)
+
     # Substitute spacing terms to reduce flops
     return Operator(eqn + src_term + rec_term, subs=model.spacing_map,
                     name='Forward', **kwargs)
@@ -140,19 +101,20 @@ def AdjointOperator(model, source, receiver, space_order=4,
 
     v = TimeFunction(name='v', grid=model.grid, save=None,
                      time_order=2, space_order=space_order)
-    srca = PointSource(name='srca', grid=model.grid, ntime=source.nt,
+    srca = PointSource(name='srca', grid=model.grid, time_range=source.time_range,
                        npoint=source.npoint)
-    rec = Receiver(name='rec', grid=model.grid, ntime=receiver.nt,
+    rec = Receiver(name='rec', grid=model.grid, time_range=receiver.time_range,
                    npoint=receiver.npoint)
 
     s = model.grid.stepping_dim.spacing
     eqn = iso_stencil(v, m, s, damp, kernel, forward=False)
 
-    # Construct expression to inject source values
-    receivers = rec.inject(v.backward, expr=s**2/m * rec, offset=model.nbpml)
+    # Construct expression to inject receiver values
+    receivers = rec.inject(field=v.backward, expr=rec * s**2 / m,
+                           offset=model.nbpml)
 
     # Create interpolation expression for the adjoint-source
-    source_a = read_rec(srca, v, s, model, kernel)
+    source_a = srca.interpolate(expr=v, offset=model.nbpml)
 
     # Substitute spacing terms to reduce flops
     return Operator(eqn + receivers + source_a, subs=model.spacing_map,
@@ -178,8 +140,8 @@ def GradientOperator(model, source, receiver, space_order=4, save=True,
                      else None, time_order=2, space_order=space_order)
     v = TimeFunction(name='v', grid=model.grid, save=None,
                      time_order=2, space_order=space_order)
-    rec = Receiver(name='rec', grid=model.grid, ntime=receiver.nt,
-                   npoint=receiver.npoint)
+    rec = Receiver(name='rec', grid=model.grid,
+                   time_range=receiver.time_range, npoint=receiver.npoint)
 
     s = model.grid.stepping_dim.spacing
     eqn = iso_stencil(v, m, s, damp, kernel, forward=False)
@@ -187,11 +149,14 @@ def GradientOperator(model, source, receiver, space_order=4, save=True,
     if kernel == 'OT2':
         gradient_update = Eq(grad, grad - u.dt2 * v)
     elif kernel == 'OT4':
-        gradient_update = Eq(grad, grad - u.dt2 * (v.dt2 + 1 / m * v.laplace))
+        gradient_update = Eq(grad, grad - (u.dt2 +
+                                           s**2 / 12.0 * u.laplace2(m**(-2))) * v)
     else:
         error("Unrecognized kernel, has to be OT2 or OT4")
-    # Construct expression to inject source values
-    receivers = inject_src(rec, rec.backward, s, model, kernel)
+    # Add expression for receiver injection
+    receivers = rec.inject(field=v.backward, expr=rec * s**2 / m,
+                           offset=model.nbpml)
+
     # Substitute spacing terms to reduce flops
     return Operator(eqn + receivers + [gradient_update], subs=model.spacing_map,
                     name='Gradient', **kwargs)
@@ -211,9 +176,9 @@ def BornOperator(model, source, receiver, space_order=4,
     m, damp = model.m, model.damp
 
     # Create source and receiver symbols
-    src = PointSource(name='src', grid=model.grid, ntime=source.nt,
+    src = PointSource(name='src', grid=model.grid, time_range=source.time_range,
                       npoint=source.npoint)
-    rec = Receiver(name='rec', grid=model.grid, ntime=receiver.nt,
+    rec = Receiver(name='rec', grid=model.grid, time_range=receiver.time_range,
                    npoint=receiver.npoint)
 
     # Create wavefields and a dm field
@@ -221,14 +186,16 @@ def BornOperator(model, source, receiver, space_order=4,
                      time_order=2, space_order=space_order)
     U = TimeFunction(name="U", grid=model.grid, save=None,
                      time_order=2, space_order=space_order)
-    dm = Function(name="dm", grid=model.grid)
+    dm = Function(name="dm", grid=model.grid, space_order=0)
 
     s = model.grid.stepping_dim.spacing
     eqn1 = iso_stencil(u, m, s, damp, kernel)
     eqn2 = iso_stencil(U, m, s, damp, kernel, q=-dm*u.dt2)
 
-    # Construct expression to inject source values
-    source = inject_src(src, u.forward, s, model, kernel)
+    # Add source term expression for u
+    source = src.inject(field=u.forward, expr=src * s**2 / m,
+                        offset=model.nbpml)
+
     # Create receiver interpolation expression from U
     receivers = rec.interpolate(expr=U, offset=model.nbpml)
 

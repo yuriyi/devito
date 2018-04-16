@@ -2,8 +2,12 @@ import numpy as np
 from sympy import Eq
 import pytest
 from conftest import skipif_yask
+from math import sin, floor
 
 from devito.cgen_utils import FLOAT
+from devito import Grid, Operator, Function, SparseFunction, Dimension
+from devito.function import PrecomputedSparseFunction
+from examples.seismic import demo_model, TimeAxis, RickerSource, Receiver
 from devito import Grid, Operator, Function, SparseFunction, Dimension, TimeFunction
 from examples.seismic import demo_model, RickerSource, Receiver
 from examples.seismic.acoustic import AcousticWaveSolver
@@ -51,6 +55,56 @@ def custom_points(grid, ranges, npoints, name='points'):
     return points
 
 
+def precompute_linear_interpolation(points, grid, origin):
+    """ Sample precompute function that, given point and grid information
+        precomputes gridpoints and coefficients according to a linear
+        scheme to be used in PrecomputedSparseFunction.
+    """
+    gridpoints = [tuple(floor((point[i]-origin[i])/grid.spacing[i])
+                        for i in range(len(point))) for point in points]
+
+    coefficients = np.zeros((len(points), 2, 2))
+    for i, point in enumerate(points):
+        for d in range(grid.dim):
+            coefficients[i, d, 0] = ((gridpoints[i][d] + 1)*grid.spacing[d] -
+                                     point[d])/grid.spacing[d]
+            coefficients[i, d, 1] = (point[d]-gridpoints[i][d]*grid.spacing[d])\
+                / grid.spacing[d]
+    return gridpoints, coefficients
+
+
+@skipif_yask
+def test_precomputed_interpolation():
+    """ Test interpolation with PrecomputedSparseFunction which accepts
+        precomputed values for coefficients
+    """
+    shape = (101, 101)
+    points = [(.05, .9), (.01, .8), (0.07, 0.84)]
+    origin = (0, 0)
+
+    grid = Grid(shape=shape, origin=origin)
+    r = 2  # Constant for linear interpolation
+    #  because we interpolate across 2 neighbouring points in each dimension
+
+    def init(data):
+        for i in range(data.shape[0]):
+            for j in range(data.shape[1]):
+                data[i, j] = sin(grid.spacing[0]*i) + sin(grid.spacing[1]*j)
+        return data
+
+    m = Function(name='m', grid=grid, initializer=init, space_order=0)
+
+    gridpoints, coefficients = precompute_linear_interpolation(points, grid, origin)
+
+    sf = PrecomputedSparseFunction(name='s', grid=grid, r=r, npoint=len(points),
+                                   gridpoints=gridpoints, coefficients=coefficients)
+    eqn = sf.interpolate(m)
+    op = Operator(eqn)
+    op()
+    expected_values = [sin(point[0]) + sin(point[1]) for point in points]
+    assert(all(np.isclose(sf.data, expected_values, rtol=1e-6)))
+
+
 @skipif_yask
 @pytest.mark.parametrize('shape, coords', [
     ((11, 11), [(.05, .9), (.01, .8)]),
@@ -95,6 +149,25 @@ def test_interpolate_cum(shape, coords, npoints=20):
     ((11, 11), [(.05, .9), (.01, .8)]),
     ((11, 11, 11), [(.05, .9), (.01, .8), (0.07, 0.84)])
 ])
+def test_interpolate_array(shape, coords, npoints=20):
+    """Test generic point interpolation testing the x-coordinate of an
+    abitrary set of points going across the grid.
+    """
+    a = unit_box(shape=shape)
+    p = points(a.grid, coords, npoints=npoints)
+    xcoords = p.coordinates.data[:, 0]
+
+    expr = p.interpolate(a)
+    Operator(expr)(a=a, points=p.data[:])
+
+    assert np.allclose(p.data[:], xcoords, rtol=1e-6)
+
+
+@skipif_yask
+@pytest.mark.parametrize('shape, coords', [
+    ((11, 11), [(.05, .9), (.01, .8)]),
+    ((11, 11, 11), [(.05, .9), (.01, .8), (0.07, 0.84)])
+])
 def test_interpolate_custom(shape, coords, npoints=20):
     """Test generic point interpolation testing the x-coordinate of an
     abitrary set of points going across the grid.
@@ -128,6 +201,29 @@ def test_inject(shape, coords, result, npoints=19):
     expr = p.inject(a, FLOAT(1.))
 
     Operator(expr)(a=a)
+
+    indices = [slice(4, 6, 1) for _ in coords]
+    indices[0] = slice(1, -1, 1)
+    assert np.allclose(a.data[indices], result, rtol=1.e-5)
+
+
+@skipif_yask
+@pytest.mark.parametrize('shape, coords, result', [
+    ((11, 11), [(.05, .95), (.45, .45)], 1.),
+    ((11, 11, 11), [(.05, .95), (.45, .45), (.45, .45)], 0.5)
+])
+def test_inject_array(shape, coords, result, npoints=19):
+    """Test point injection with a set of points forming a line
+    through the middle of the grid.
+    """
+    a = unit_box(shape=shape)
+    a.data[:] = 0.
+    p = points(a.grid, ranges=coords, npoints=npoints)
+    p2 = points(a.grid, ranges=coords, npoints=npoints, name='p2')
+    p2.data[:] = 1.
+    expr = p.inject(a, p)
+
+    Operator(expr)(a=a, points=p2.data[:])
 
     indices = [slice(4, 6, 1) for _ in coords]
     indices[0] = slice(1, -1, 1)
@@ -237,16 +333,15 @@ def test_position(shape):
 
     # Derive timestepping from model spacing
     dt = model.critical_dt
-    nt = int(1 + (tn-t0) / dt)  # Number of timesteps
-    time_values = np.linspace(t0, tn, nt)  # Discretized time axis
+    time_range = TimeAxis(start=t0, stop=tn, step=dt)
 
     # Define source geometry (center of domain, just below surface)
-    src = RickerSource(name='src', grid=model.grid, f0=0.01, time=time_values)
+    src = RickerSource(name='src', grid=model.grid, f0=0.01, time_range=time_range)
     src.coordinates.data[0, :] = np.array(model.domain_size) * .5
     src.coordinates.data[0, -1] = 30.
 
     # Define receiver geometry (same as source, but spread across x)
-    rec = Receiver(name='rec', grid=model.grid, ntime=nt, npoint=nrec)
+    rec = Receiver(name='rec', grid=model.grid, time_range=time_range, npoint=nrec)
     rec.coordinates.data[:, 0] = np.linspace(0., model.domain_size[0], num=nrec)
     rec.coordinates.data[:, 1:] = src.coordinates.data[0, 1:]
 
@@ -258,12 +353,12 @@ def test_position(shape):
     rec, u, _ = solver.forward(save=False)
 
     # Define source geometry (center of domain, just below surface) with 100. origin
-    src = RickerSource(name='src', grid=model.grid, f0=0.01, time=time_values)
+    src = RickerSource(name='src', grid=model.grid, f0=0.01, time_range=time_range)
     src.coordinates.data[0, :] = np.array(model.domain_size) * .5 + 100.
     src.coordinates.data[0, -1] = 130.
 
     # Define receiver geometry (same as source, but spread across x)
-    rec2 = Receiver(name='rec', grid=model.grid, ntime=nt, npoint=nrec)
+    rec2 = Receiver(name='rec', grid=model.grid, time_range=time_range, npoint=nrec)
     rec2.coordinates.data[:, 0] = np.linspace(100., 100. + model.domain_size[0],
                                               num=nrec)
     rec2.coordinates.data[:, 1:] = src.coordinates.data[0, 1:]

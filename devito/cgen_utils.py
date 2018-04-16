@@ -1,5 +1,6 @@
 from collections import OrderedDict
 
+import numpy as np
 import cgen as c
 from mpmath.libmp import prec_to_dps, to_str
 from sympy import Function
@@ -28,16 +29,15 @@ class Allocator(object):
     def push_heap(self, obj):
         """
         Generate cgen objects to declare, allocate memory, and free memory for
-        ``obj``, of type :class:`SymbolicData`.
+        ``obj``, of type :class:`Array`.
         """
         if obj in self.heap:
             return
 
-        decl = "(*%s)%s" % (obj.name,
-                            "".join("[%s]" % i.symbolic_size for i in obj.indices[1:]))
+        decl = "(*%s)%s" % (obj.name, "".join("[%s]" % i for i in obj.symbolic_shape[1:]))
         decl = c.Value(c.dtype_to_ctype(obj.dtype), decl)
 
-        shape = "".join("[%s]" % i.symbolic_size for i in obj.indices)
+        shape = "".join("[%s]" % i for i in obj.symbolic_shape)
         alloc = "posix_memalign((void**)&%s, 64, sizeof(%s%s))"
         alloc = alloc % (obj.name, c.dtype_to_ctype(obj.dtype), shape)
         alloc = c.Statement(alloc)
@@ -59,7 +59,7 @@ class Allocator(object):
 
 class CodePrinter(C99CodePrinter):
 
-    custom_functions = {'INT': '(int)', 'FLOAT': '(float)'}
+    custom_functions = {'INT': '(int)', 'FLOAT': '(float)', 'DOUBLE': '(double)'}
 
     """Decorator for sympy.printing.ccode.CCodePrinter.
 
@@ -172,3 +172,6 @@ printmark = lambda i: c.Line('printf("Here: %s\\n"); fflush(stdout);' % i)
 printvar = lambda i: c.Statement('printf("%s=%%s\\n", %s); fflush(stdout);' % (i, i))
 INT = Function('INT')
 FLOAT = Function('FLOAT')
+DOUBLE = Function('DOUBLE')
+
+cast_mapper = {np.float32: FLOAT, float: DOUBLE, np.float64: DOUBLE}
