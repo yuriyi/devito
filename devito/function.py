@@ -5,7 +5,7 @@ import sympy
 import numpy as np
 from psutil import virtual_memory
 
-from devito.cgen_utils import INT, cast_mapper
+from devito.cgen_utils import INT, cast_mapper, FLOAT
 from devito.data import Data, first_touch
 from devito.dimension import Dimension, DefaultDimension
 from devito.equation import Eq, Inc
@@ -660,6 +660,7 @@ class TimeFunction(Function):
 
     def __init__(self, *args, **kwargs):
         if not self._cached():
+            self.time_order = kwargs.get('time_order', 1)
             super(TimeFunction, self).__init__(*args, **kwargs)
 
             # Check we won't allocate too much memory for the system
@@ -669,7 +670,6 @@ class TimeFunction(Function):
                         "than available on physical device, this will start swapping")
 
             self.time_dim = kwargs.get('time_dim', self.indices[self._time_position])
-            self.time_order = kwargs.get('time_order', 1)
             self.save = type(kwargs.get('save', None) or None)
             if not isinstance(self.time_order, int):
                 raise ValueError("'time_order' must be int")
@@ -1173,6 +1173,7 @@ class SparseTimeFunction(SparseFunction):
 
     def __init__(self, *args, **kwargs):
         if not self._cached():
+            self.time_order = kwargs.get('time_order', 1)
             super(SparseTimeFunction, self).__init__(*args, **kwargs)
 
             nt = kwargs.get('nt')
@@ -1181,7 +1182,6 @@ class SparseTimeFunction(SparseFunction):
             self.nt = nt
 
             self.time_dim = self.indices[self._time_position]
-            self.time_order = kwargs.get('time_order', 1)
             if not isinstance(self.time_order, int):
                 raise ValueError("'time_order' must be int")
 

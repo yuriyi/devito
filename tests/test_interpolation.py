@@ -245,8 +245,8 @@ def test_inject_fd(shape, coords, axis):
     point / (h_x/2) at coord_x - .5
     - point / (h_x/2) at coord_x + .5
     which with interpolation leads to
-    u[p, y] = point / (h_x/2)
-    u[p+1, y] = -point / (h_x/2)
+    u[p, y] = point / (2*h_x)
+    u[p+1, y] = -point / (2*h_x)
     """
     a = unit_box(shape=shape)
     a.data[:] = 0.
@@ -262,9 +262,10 @@ def test_inject_fd(shape, coords, axis):
     indices1 = [slice(int(10*c[0]), int(10*c[0]) + 1, 1) for c in coords]
     indices1[axis] = slice(int(coords[axis][0]*10) - 1, int(coords[axis][0]*10), 1)
     indices2 = [slice(int(c[0]*10), int(c[0]*10) + 1, 1) for c in coords]
+    indices2[axis] = slice(int(coords[axis][0]*10) + 1, int(coords[axis][0]*10 + 2), 1)
     # Check values
-    assert a.data[indices1] == 10.0
-    assert a.data[indices2] == -10.0
+    assert a.data[indices1] == 5.0
+    assert a.data[indices2] == -5.0
 
 
 @skipif_yask
@@ -425,4 +426,4 @@ def test_time_shift(shape):
 
 
 if __name__ == "__main__":
-    test_time_shift((50, 50))
+    test_inject_fd((11, 11), [(.2, .2), (.5, .5)], 1)
