@@ -22,8 +22,8 @@ class TestSubDimension(object):
         t = grid.stepping_dim  # noqa
 
         u = TimeFunction(name='u', grid=grid)  # noqa
-        eqs = [Eq(u.forward, u + 1),
-               Eq(u.forward, u.forward + 2, region=INTERIOR)]
+        eqs = [Eq(u.forward, u + 1.),
+               Eq(u.forward, u.forward + 2., region=INTERIOR)]
 
         op = Operator(eqs, dse='noop', dle='noop')
         trees = retrieve_iteration_tree(op)
@@ -192,7 +192,6 @@ class TestConditionalDimension(object):
         op = Operator(eqns)
         op.apply(time_M=nt-2)
         # Verify that u2[x,y]= u[2*x, 2*y]
-        print(u.data[nt-1])
         assert np.all(np.allclose(u.data[nt-1], nt-1))
         assert np.allclose(u.data[:-1, 0:-1:2, 0:-1:2], u2.data[:-1, :, :])
 
@@ -335,4 +334,4 @@ class TestConditionalDimension(object):
 
 
 if __name__ == "__main__":
-    TestConditionalDimension().test_laplace()
+    TestConditionalDimension().test_basic()

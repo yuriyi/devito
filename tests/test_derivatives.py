@@ -167,7 +167,7 @@ def test_subsampled_fd():
     functions.
     """
     nt = 19
-    grid = Grid(shape=(12, 12))
+    grid = Grid(shape=(12, 12), extent=(11, 11))
     time = grid.time_dim
 
     u = TimeFunction(name='u', grid=grid, save=nt, space_order=2)
@@ -181,16 +181,13 @@ def test_subsampled_fd():
     time_subsampled = ConditionalDimension('t_sub', parent=time, factor=factor)
     u2 = TimeFunction(name='u2', grid=grid2, save=nt, space_order=1)
     for i in range(nt):
-        for j in range(u2.data.shape[2]):
-            u2.data[i, :, j] = np.linspace(1.0, 2.0, u2.data.shape[2])
+        for j in range(u2.data_allocated.shape[2]):
+            u2.data_allocated[i, :, j] = np.arange(u2.data_allocated.shape[2])
 
-    eqns = [Eq(u.forward, u + 1.), Eq(u2, u2.dx)]
+    eqns = [Eq(u.forward, u + 1.), Eq(u2.forward, u2.dx)]
     op = Operator(eqns, dse="advanced")
-    op.apply(time_M=nt-2, x_m=3, x_M=9)
+    op.apply(time_M=nt-2)
     # Verify that u2[x,y]= u[2*x, 2*y]
+    print(u2.data[:, 3, 3])
     assert np.all(np.allclose(u.data[-1], nt-1))
-    assert np.allclose(u.data[:-3, 0:-1:2, 0:-1:2], u2.data[1:-2, :, :])
-
-
-if __name__ == "__main__":
-    test_subsampled_fd()
+    assert np.allclose(u2.data[1], 0.5)
