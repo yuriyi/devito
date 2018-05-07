@@ -114,7 +114,9 @@ def guard(clusters):
                 for i in range(len(processed)):
                     pr = processed[i]
                     # Check common expression and common coditions
-                    if pr.exprs == exprs and any(a == b for a, b in zip(pr.guards, guards)):
+                    if pr.exprs == exprs and pr.guards == guards:
+                        continue
+                    elif pr.exprs == exprs and any(a == b for a, b in zip(pr.guards, guards)):
                         for dim in keys:
                             # Merge conditons if both Eq and Ne for a given expression
                             if dim in pr.guards.keys() and pr.guards[dim] != guards[dim]:
@@ -124,12 +126,14 @@ def guard(clusters):
                         cluster = PartialCluster(exprs, c.ispace, c.dspace,
                                                  c.atomics, guards)
                         processed.append(cluster)
+                        break
             else:
                 # Add first cluster no matter what
                 cluster = PartialCluster(exprs, c.ispace, c.dspace, c.atomics, guards)
                 processed.append(cluster)
 
     processed = ClusterGroup(c for c in processed if len(c.exprs)>0)
+    print([(c.exprs, c.guards)for c in processed if len(c.guards)>0 ])
     return processed
 
 
