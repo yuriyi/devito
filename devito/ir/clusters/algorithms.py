@@ -135,7 +135,7 @@ def guard(clusters):
                 processed.append(cluster)
 
     processed = ClusterGroup(c for c in processed if len(c.exprs) > 0)
-    print([(c.exprs, c.guards)for c in processed if len(c.guards) > 0])
+
     return processed
 
 

@@ -187,5 +187,5 @@ def test_subsampled_fd():
     op.apply(time_M=nt-2)
     # Verify that u2[x,y]= u[2*x, 2*y]
     print(u2.data[:, 3, 3])
-    assert np.all(np.allclose(u.data[-1], nt-1))
+    assert np.allclose(u.data[-1], nt-1)
     assert np.allclose(u2.data[1], 0.5)
