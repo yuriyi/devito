@@ -177,8 +177,6 @@ def test_subsampled_fd():
     dims = tuple([ConditionalDimension(d.name+'sub', parent=d, factor=2)
                   for d in u.grid.dimensions])
     grid2 = Grid((6, 6), dimensions=dims)
-    factor = 4
-    time_subsampled = ConditionalDimension('t_sub', parent=time, factor=factor)
     u2 = TimeFunction(name='u2', grid=grid2, save=nt, space_order=1)
     for i in range(nt):
         for j in range(u2.data_allocated.shape[2]):
