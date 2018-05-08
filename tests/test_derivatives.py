@@ -184,7 +184,7 @@ def test_subsampled_fd():
     eqns = [Eq(u.forward, u + 1.), Eq(u2.forward, u2.dx)]
     op = Operator(eqns, dse="advanced")
     op.apply(time_M=nt-2)
-    # Verify that u2[x,y]= u[2*x, 2*y]
-    print(u2.data[:, 3, 3])
+    # Verify that u2[1, x,y]= du2/dx[0, x, y]
+
     assert np.allclose(u.data[-1], nt-1)
     assert np.allclose(u2.data[1], 0.5)

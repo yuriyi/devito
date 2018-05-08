@@ -108,7 +108,13 @@ def guard(clusters):
             guards.extend([(i.parent, negated[i]) for i in ndims])
             guards = dict(guards)
 
-            # Ugly merge of conditonals if both conditions
+            # Merge of conditonals if both conditions. In case of multiple Conditionals
+            # we can have a case where we have:
+            # (expr, Eq(Mod(x, factor), 0), Ne(Mod(y, factor), 0))
+            # (expr, Eq(Mod(x, factor), 0), Eq(Mod(y, factor), 0))
+            # In which case it ca be reduced to
+            # (expr, Eq(Mod(x, factor), 0))
+            # as both case of y are present
             if len(processed) > 0 and len(guards) > 0:
                 # Check exisiting PartialCluster
                 for i in range(len(processed)):
@@ -117,6 +123,8 @@ def guard(clusters):
                     common_guards = any(a == b for a, b in zip(pr.guards, guards))
                     # Check common expression and common coditions
                     if common_expr and pr.guards == guards:
+                        # This one should never happen in theory but skip the expression
+                        # if it is already present with the same conditions
                         continue
                     elif common_expr and common_guards:
                         for dim in keys:
@@ -130,7 +138,7 @@ def guard(clusters):
                         processed.append(cluster)
                         break
             else:
-                # Add first cluster no matter what
+                # Add first and unconditional expression
                 cluster = PartialCluster(exprs, c.ispace, c.dspace, c.atomics, guards)
                 processed.append(cluster)
 
