@@ -168,7 +168,6 @@ def test_subsampled_fd():
     """
     nt = 19
     grid = Grid(shape=(12, 12), extent=(11, 11))
-    time = grid.time_dim
 
     u = TimeFunction(name='u', grid=grid, save=nt, space_order=2)
     assert(grid.time_dim in u.indices)
