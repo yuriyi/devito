@@ -1,5 +1,3 @@
 #!/usr/bin/env bash
 
-find /app -type f -name '*.pyc' -delete
-
-exec "$@"
+PYTHONPATH=/app /venv/bin/python "$@"

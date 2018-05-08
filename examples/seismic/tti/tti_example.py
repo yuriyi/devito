@@ -14,6 +14,7 @@ def tti_setup(shape=(50, 50, 50), spacing=(20.0, 20.0, 20.0), tn=250.0,
     model = demo_model('layers-tti', shape=shape, spacing=spacing, nbpml=nbpml)
     # Derive timestepping from model spacing
     dt = model.critical_dt
+    print(dt)
     t0 = 0.0
     time_range = TimeAxis(start=t0, stop=tn, step=dt)
 
@@ -74,9 +75,9 @@ if __name__ == "__main__":
         spacing = (10.0, 10.0)
         tn = 750.0
     else:
-        shape = (50, 50, 50)
-        spacing = (10.0, 10.0, 10.0)
-        tn = 250.0
+        shape = (1334, 254, 721)
+        spacing = (7.5, 7.5, 7.5)
+        tn = 6000.0
 
     run(shape=shape, spacing=spacing, nbpml=args.nbpml, tn=tn,
         space_order=args.space_order, autotune=args.autotune, dse=args.dse,

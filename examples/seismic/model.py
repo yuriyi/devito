@@ -108,7 +108,7 @@ def demo_model(preset, **kwargs):
         nbpml = kwargs.pop('nbpml', 10)
         ratio = kwargs.pop('ratio', 2)
         vp_top = kwargs.pop('vp_top', 1.5)
-        vp_bottom = kwargs.pop('vp_bottom', 2.5)
+        vp_bottom = kwargs.pop('vp_bottom', 4.5)
 
         # Define a velocity profile in km/s
         v = np.empty(shape, dtype=dtype)
@@ -119,12 +119,12 @@ def demo_model(preset, **kwargs):
         delta = .2*(v - 1.5)
         theta = .5*(v - 1.5)
         phi = None
-        if len(shape) > 2:
-            phi = .1*(v - 1.5)
+        # if len(shape) > 2:
+        #     phi = .1*(v - 1.5)
 
         return Model(space_order=space_order, vp=v, origin=origin, shape=shape,
                      dtype=dtype, spacing=spacing, nbpml=nbpml, epsilon=epsilon,
-                     delta=delta, theta=theta, phi=phi, **kwargs)
+                     delta=delta, theta=theta, **kwargs)
 
     elif preset.lower() in ['circle-isotropic']:
         # A simple circle in a 2D domain with a background velocity.
