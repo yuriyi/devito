@@ -2,7 +2,7 @@ import numpy as np
 from sympy import solve
 from conftest import skipif_yask
 
-from devito import Buffer, Grid, Eq, Operator, TimeFunction
+from devito import Grid, Eq, Operator, TimeFunction
 
 
 def initial(nt, nx, ny):
@@ -46,7 +46,7 @@ def test_buffer_api():
     grid = Grid(shape=(3, 3))
     u0 = TimeFunction(name='u', grid=grid, time_order=2)
     u1 = TimeFunction(name='u', grid=grid, save=20, time_order=2)
-    u2 = TimeFunction(name='u', grid=grid, save=Buffer(2), time_order=2)
+    u2 = TimeFunction(name='u', grid=grid, buffer=2, time_order=2)
 
     assert u0.shape[TimeFunction._time_position] == 3
     assert u1.shape[TimeFunction._time_position] == 20
@@ -55,3 +55,12 @@ def test_buffer_api():
     assert u0._time_buffering
     assert not u1._time_buffering
     assert u2._time_buffering
+
+    try:
+        # It's illegal to use `save` and `buffer` together
+        TimeFunction(name='u', grid=grid, save=20, buffer=2, time_order=2)
+        assert False
+    except TypeError:
+        pass
+    except:
+        assert False

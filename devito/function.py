@@ -21,7 +21,7 @@ from devito.types import AbstractCachedFunction, AbstractCachedSymbol
 from devito.tools import Tag, ReducerMap, prod, powerset
 
 __all__ = ['Constant', 'Function', 'TimeFunction', 'SparseFunction',
-           'SparseTimeFunction', 'PrecomputedSparseFunction', 'Buffer']
+           'SparseTimeFunction', 'PrecomputedSparseFunction']
 
 
 class Constant(AbstractCachedSymbol):
@@ -589,19 +589,20 @@ class TimeFunction(Function):
     :param dimensions: (Optional) symbolic dimensions that define the
                        data layout and function indices of this symbol.
     :param dtype: (Optional) data type of the buffered data
-    :param save: (Optional) Defaults to `None`, which indicates the use of
-                 alternating buffers. This enables cyclic writes to the
-                 TimeFunction. For example, if the TimeFunction ``u(t, x)`` has
-                 shape (3, 100), then, in an :class:`Operator`, ``t`` will
-                 assume the values ``1, 2, 0, 1, 2, 0, 1, ...`` (note that the
-                 very first value depends on the stencil equation in which
-                 ``u`` is written.). The default size of the time buffer when
-                 ``save=None`` is ``time_order + 1``.  To specify a different
-                 size for the time buffer, one should use the syntax
-                 ``save=Buffer(mysize)``. Alternatively, if all of the
-                 intermediate results are required (or, simply, to forbid the
-                 usage of an alternating buffer), an explicit value for ``save``
-                 (i.e., an integer) must be provided.
+    :param buffer: (Optional) Use alternating buffers when writing to the
+                   TimeFunction. For example, if the TimeFunction ``u`` has three
+                   alternating buffers, an Operator writing to ``u`` will
+                   cyclically generate the indices ``..., 1, 2, 0, 1, 2, 0, 1, ...``
+                   along the time dimension. The first index of the sequence
+                   is dictated by the stencil equation(s) writing to ``u``.
+                   By default, a TimeFunction uses ``time_order + 1`` alternating
+                   buffers. This parameter may be used to specify a different
+                   number of alternating buffers. To disable the alternating
+                   buffers mechanism, use :param:`save`.
+    :param save: (Optional) Defaults to `None`, which implies the use of
+                 alternating buffer slots (see :param:`buffer` for more
+                 information). Otherwise, if ``N`` intermediate results are
+                 required, pass ``save=N``.
     :param time_dim: (Optional) The :class:`Dimension` object to use to represent
                      time in this symbol. Defaults to the time dimension provided
                      by the :class:`Grid`.
@@ -652,6 +653,12 @@ class TimeFunction(Function):
     _time_position = 0
     """Position of time index among the function indices."""
 
+    class WriteMode(Tag):
+        pass
+    SAVE = WriteMode('save')
+    BUFFER_USER = WriteMode('buffer_user')
+    BUFFER_DEFAULT = WriteMode('buffer_default')
+
     def __init__(self, *args, **kwargs):
         if not self._cached():
             super(TimeFunction, self).__init__(*args, **kwargs)
@@ -667,7 +674,12 @@ class TimeFunction(Function):
             if not isinstance(self.time_order, int):
                 raise TypeError("`time_order` must be int")
 
-            self.save = type(kwargs.get('save', None) or None)
+            if kwargs.get('save'):
+                self._write_mode = TimeFunction.SAVE
+            elif kwargs.get('buffer'):
+                self._write_mode = TimeFunction.BUFFER_USER
+            else:
+                self._write_mode = TimeFunction.BUFFER_DEFAULT
 
     @classmethod
     def __indices_setup__(cls, **kwargs):
@@ -689,6 +701,7 @@ class TimeFunction(Function):
     def __shape_setup__(cls, **kwargs):
         grid = kwargs.get('grid')
         save = kwargs.get('save') or None  # Force to None if 0/False/None/...
+        buffer = kwargs.get('buffer') or None
         shape = kwargs.get('shape')
         time_order = kwargs.get('time_order', 1)
 
@@ -699,14 +712,15 @@ class TimeFunction(Function):
                 raise TypeError("Ambiguity detected: provide either `grid` and `save` "
                                 "or just `shape` ")
         else:
-            if save is None:
-                shape = (time_order + 1,) + grid.shape_domain
-            elif isinstance(save, Buffer):
-                shape = (save.val,) + grid.shape_domain
-            elif isinstance(save, int):
-                shape = (save,) + grid.shape_domain
+            if save is not None and buffer is not None:
+                raise TypeError("Ambiguity detected: provide either `save` or "
+                                "`buffer`, not both")
             else:
-                raise TypeError("`save` can be None, int or Buffer, not %s" % type(save))
+                val = save or buffer
+                if val is None:
+                    shape = (time_order + 1,) + grid.shape_domain
+                else:
+                    shape = (val,) + grid.shape_domain
         return shape
 
     @property
@@ -753,11 +767,11 @@ class TimeFunction(Function):
 
     @property
     def _time_buffering(self):
-        return self.save is not int
+        return self._write_mode is not TimeFunction.SAVE
 
     @property
     def _time_buffering_default(self):
-        return self._time_buffering and self.save != Buffer
+        return self._write_mode is TimeFunction.BUFFER_DEFAULT
 
     def _arg_check(self, args, intervals):
         super(TimeFunction, self)._arg_check(args, intervals)
@@ -1092,7 +1106,7 @@ class SparseTimeFunction(SparseFunction):
             self.time_dim = self.indices[self._time_position]
             self.time_order = kwargs.get('time_order', 1)
             if not isinstance(self.time_order, int):
-                raise ValueError("`time_order` must be int")
+                raise TypeError("`time_order` must be int")
 
     @classmethod
     def __indices_setup__(cls, **kwargs):
@@ -1260,11 +1274,3 @@ class PrecomputedSparseFunction(AbstractSparseFunction):
         rhs = prod(coeffs) * expr
         field = field.subs(dim_subs)
         return [Eq(field, field + rhs.subs(dim_subs))]
-
-
-# Additional Function-related APIs
-
-class Buffer(Tag):
-
-    def __init__(self, value):
-        super(Buffer, self).__init__('Buffer', value)
