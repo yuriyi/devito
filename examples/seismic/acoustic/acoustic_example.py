@@ -11,7 +11,6 @@ from examples.seismic.utils import smooth
 def acoustic_setup(shape=(50, 50, 50), spacing=(15.0, 15.0, 15.0),
                    tn=500., kernel='OT2', space_order=4, nbpml=10,
                    constant=False, **kwargs):
-    nrec = shape[0]
     preset = 'constant-isotropic' if constant else 'layers-isotropic'
     model = demo_model(preset, space_order=space_order, shape=shape, nbpml=nbpml,
                        dtype=kwargs.pop('dtype', np.float32), spacing=spacing)
@@ -22,15 +21,24 @@ def acoustic_setup(shape=(50, 50, 50), spacing=(15.0, 15.0, 15.0),
     time_range = TimeAxis(start=t0, stop=tn, step=dt)
 
     # Define source geometry (center of domain, just below surface)
-    src = RickerSource(name='src', grid=model.grid, f0=0.01, time_range=time_range)
-    src.coordinates.data[0, :] = np.array(model.domain_size) * .5
-    if len(shape) > 1:
-        src.coordinates.data[0, -1] = model.origin[-1] + 2 * spacing[-1]
-    # Define receiver geometry (spread across x, just below surface)
-    rec = Receiver(name='rec', grid=model.grid, time_range=time_range, npoint=nrec)
-    rec.coordinates.data[:, 0] = np.linspace(0., model.domain_size[0], num=nrec)
-    if len(shape) > 1:
-        rec.coordinates.data[:, 1:] = src.coordinates.data[0, 1:]
+    # Note: all sources and receivers are initially placed on rank0. Devito,
+    # upon running an Operator, automatically distributes them to the other
+    # ranks according to the domain decompowhen information carried by `grid`
+    if model.grid.distributor.myrank == 0:
+        src = RickerSource(name='src', grid=model.grid, f0=0.01, time_range=time_range)
+        src.coordinates.data[0, :] = np.array(model.domain_size) * .5
+        if len(shape) > 1:
+            src.coordinates.data[0, -1] = model.origin[-1] + 2 * spacing[-1]
+        # Define receiver geometry (spread across x, just below surface)
+        nrec = shape[0]
+        rec = Receiver(name='rec', grid=model.grid, time_range=time_range, npoint=nrec)
+        rec.coordinates.data[:, 0] = np.linspace(0., model.domain_size[0], num=nrec)
+        if len(shape) > 1:
+            rec.coordinates.data[:, 1:] = src.coordinates.data[0, 1:]
+    else:
+        src = RickerSource(name='src', grid=model.grid, f0=0.01,
+                           time_range=time_range, npoint=0)
+        rec = Receiver(name='rec', grid=model.grid, time_range=time_range, npoint=0)
 
     # Create solver object to provide relevant operators
     solver = AcousticWaveSolver(model, source=src, receiver=rec, kernel=kernel,
