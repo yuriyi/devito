@@ -515,6 +515,7 @@ class TestOperatorSimple(object):
 
         glb_pos_map = f.grid.distributor.glb_pos_map
 
+        from IPython import embed; embed()
         assert np.all(f.data_ro_interior[0] == interior)
         if LEFT in glb_pos_map[x] and LEFT in glb_pos_map[y]:
             assert f.data_ro_domain[0, 0, 0] == corner
@@ -1051,4 +1052,4 @@ class TestIsotropicAcoustic(object):
 
 if __name__ == "__main__":
     configuration['mpi'] = True
-    TestOperatorAdvanced().test_nontrivial_operator()
+    TestOperatorSimple().test_trivial_eq_2d()
