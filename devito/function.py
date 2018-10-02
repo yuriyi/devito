@@ -365,16 +365,6 @@ class TensorFunction(AbstractCachedFunction, ArgProvider):
 
     @property
     @_allocate_memory
-    def data_ro_interior(self):
-        """
-        A read-only view of the interior data values.
-        """
-        view = self._data[self._mask_interior]
-        view.setflags(write=False)
-        return view
-
-    @property
-    @_allocate_memory
     def data_ro_with_halo(self):
         """A read-only view of the domain+halo data values."""
         view = self._data[self._mask_with_halo]
